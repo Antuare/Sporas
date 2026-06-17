@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simulador de Evolución Pluricelular</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <style>
+    :root{
+      --bg:#0b0f19; --panel-bg: rgba(15,23,42,0.66);
+      --accent:#38bdf8; --muted:#94a3b8; --text:#f8fafc;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);font-family:Inter,Segoe UI,Helvetica,Arial,sans-serif;overflow:hidden}
+    #canvas-container{position:fixed;inset:0;z-index:1}
+    #ui-panel{position:fixed;left:18px;top:18px;width:340px;padding:18px;border-radius:14px;background:var(--panel-bg);color:var(--text);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:20;border:1px solid rgba(255,255,255,0.06)}
+    #ui-panel h2{margin:0 0 10px 0;color:var(--accent);font-size:1.05rem;letter-spacing:1px}
+    .stat-row{display:flex;justify-content:space-between;margin:8px 0;font-size:0.95rem}
+    .stat-label{color:var(--muted)}
+    .stat-value{font-weight:700;font-family:monospace;color:#eef2ff}
+    .legend{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06)}
+    .legend-item{display:flex;align-items:center;margin:6px 0;font-size:0.9rem;color:#e6eef8}
+    .dot{width:12px;height:12px;border-radius:50%;margin-right:8px;box-shadow:0 0 8px}
+    .dot-nut{background:#FFD700}
+    .dot-mot{background:#1E90FF}
+    .dot-sh{background:#A9A9A9}
+    .controls{display:flex;gap:8px;margin-top:12px;align-items:center}
+    .btn{padding:8px 10px;border-radius:8px;border:none;background:rgba(255,255,255,0.06);color:var(--text);cursor:pointer}
+    .btn:hover{background:rgba(255,255,255,0.08)}
+    .range-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+    input[type=range]{width:100%}
+    .small{font-size:0.82rem;color:var(--muted)}
+    footer.info{position:fixed;right:18px;bottom:18px;color:#9fb0c8;font-size:0.82rem;z-index:20;background:rgba(10,12,18,0.4);padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03)}
+    @media(max-width:420px){#ui-panel{width:92%;left:4%;top:10px}}
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <div id="ui-panel" role="region" aria-label="Panel de control">
+    <h2>Ecosistema Virtual</h2>
+
+    <div class="stat-row"><span class="stat-label">Generación Máxima:</span><span class="stat-value" id="val-generation">1</span></div>
+    <div class="stat-row"><span class="stat-label">Organismos Vivos:</span><span class="stat-value" id="val-count">0</span></div>
+    <div class="stat-row"><span class="stat-label">Clúster Más Grande:</span><span class="stat-value" id="val-max-size">0 cél.</span></div>
+    <div class="stat-row"><span class="stat-label">Comida Disponible:</span><span class="stat-value" id="val-food">0</span></div>
+
+    <div class="legend">
+      <div class="small" style="margin-bottom:6px">Especialización de Roles</div>
+      <div class="legend-item"><div class="dot dot-nut"></div><div>Nutritiva (Boca) — Absorbe energía</div></div>
+      <div class="legend-item"><div class="dot dot-mot"></div><div>Motora (Flagelo) — Propulsión y velocidad</div></div>
+      <div class="legend-item"><div class="dot dot-sh"></div><div>Coraza (Escudo) — Reduce gasto</div></div>
+    </div>
+
+    <div class="controls">
+      <button id="btn-play" class="btn">Pausa</button>
+      <button id="btn-randomize" class="btn">Reiniciar</button>
+      <div style="flex:1;text-align:right"><span class="small">FPS</span><div id="fps" class="small">60</div></div>
+    </div>
+
+    <div class="range-row">
+      <div style="width:70px" class="small">Mutación</div>
+      <input id="mutRate" type="range" min="0" max="0.8" step="0.01" value="0.35" />
+      <div id="mutVal" class="small" style="width:40px;text-align:right">35%</div>
+    </div>
+
+    <div class="range-row">
+      <div style="width:70px" class="small">Velocidad</div>
+      <input id="speedMul" type="range" min="0.5" max="2.5" step="0.05" value="1" />
+      <div id="speedVal" class="small" style="width:40px;text-align:right">1x</div>
+    </div>
+  </div>
+
+  <footer class="info">Haz clic para añadir comida. Doble clic para espantar organismos.</footer>
+
+  <script>
+    // Configuración central
+    const CONFIG = {
+      maxFood: 350,
+      initialOrganisms: 20,
+      startEnergy: 300,
+      reproduceEnergy: 750,
+      mutationRate: 0.35,
+      cellRadius: 9,
+      cellSpacing: 18,
+      baseDrain: 0.25,
+      cellDrain: 0.12,
+      shieldReduction: 0.06,
+      minDrainLimit: 0.05,
+      foodEnergy: 180,
+      baseSpeed: 1.2,
+      motorThrust: 0.5,
+      maxSteerForce: 0.08,
+      maxCellsLimit: 24
+    };
+
+    let organisms = [];
+    let foodParticles = [];
+    let globalMaxGeneration = 1;
+    let paused = false;
+    let speedMultiplier = 1;
+    let lastFPSUpdate = 0;
+
+    // --- CLASE: Food ---
+    class Food {
+      constructor(x,y){ this.pos = createVector(x,y); }
+      display(){ noStroke(); fill(57,255,20,220); ellipse(this.pos.x, this.pos.y, 5,5); }
+    }
+
+    // --- CLASE: Cell ---
+    class Cell {
+      constructor(dx, dy, type){ this.dx = dx; this.dy = dy; this.type = type; }
+      getColor(){ if(this.type==='NUTRITIVA') return color('#FFD700'); if(this.type==='MOTORA') return color('#1E90FF'); return color('#A9A9A9'); }
+    }
+
+    // --- CLASE: Organism ---
+    class Organism {
+      constructor(x,y,dna,energy,generation){
+        this.pos = createVector(x,y);
+        this.vel = p5.Vector.random2D().mult(0.5);
+        this.acc = createVector();
+        this.dna = dna.map(g => ({dx:g.dx,dy:g.dy,type:g.type}));
+        this.energy = energy;
+        this.generation = generation || 1;
+        this.angle = 0;
+        this.cells = [];
+        this.motorCount=0; this.shieldCount=0; this.nutritivaCount=0;
+        this.rebuildStructure();
+      }
+
+      rebuildStructure(){
+        this.cells = []; this.motorCount=0; this.shieldCount=0; this.nutritivaCount=0;
+        for(let g of this.dna){ this.cells.push(new Cell(g.dx,g.dy,g.type)); if(g.type==='MOTORA') this.motorCount++; if(g.type==='CORAZA') this.shieldCount++; if(g.type==='NUTRITIVA') this.nutritivaCount++; }
+      }
+
+      applyForce(f){ this.acc.add(f); }
+
+      findNearestFood(){
+        let closest=null; let minSq=Infinity;
+        if(foodParticles.length===0) return null;
+        for(let f of foodParticles){ let dx=f.pos.x - this.pos.x; let dy=f.pos.y - this.pos.y; let dsq = dx*dx + dy*dy; if(dsq < minSq){ minSq = dsq; closest = f.pos.copy(); } }
+        return closest;
+      }
+
+      preventOutOfBounds(){ const pad = 60; const push = 0.25 * speedMultiplier; if(this.pos.x < pad) this.applyForce(createVector(push,0)); if(this.pos.x > width - pad) this.applyForce(createVector(-push,0)); if(this.pos.y < pad) this.applyForce(createVector(0,push)); if(this.pos.y > height - pad) this.applyForce(createVector(0,-push)); }
+
+      update(dt){
+        let structuralCost = this.cells.length * CONFIG.cellDrain;
+        let protection = this.shieldCount * CONFIG.shieldReduction;
+        let netDrain = (CONFIG.baseDrain + structuralCost) - protection;
+        if(netDrain < CONFIG.minDrainLimit) netDrain = CONFIG.minDrainLimit;
+        this.energy -= (netDrain * dt);
+        if(this.energy <= 0) return;
+
+        let target = this.findNearestFood();
+        if(target){
+          let dynamicMaxSpeed = (CONFIG.baseSpeed + (this.motorCount * CONFIG.motorThrust)) * speedMultiplier;
+          let desired = p5.Vector.sub(target, this.pos);
+          let dmag = desired.mag();
+          if(dmag > 0.1){ desired.setMag(dynamicMaxSpeed); let steer = p5.Vector.sub(desired, this.vel); steer.limit(CONFIG.maxSteerForce * speedMultiplier); this.applyForce(steer); }
+        } else { this.applyForce(p5.Vector.random2D().mult(0.015*speedMultiplier)); }
+
+        this.preventOutOfBounds();
+
+        this.vel.add(p5.Vector.mult(this.acc, dt*60));
+        this.pos.add(p5.Vector.mult(this.vel, dt*60));
+        this.acc.mult(0);
+        if(this.vel.magSq() > 0.001) this.angle = this.vel.heading();
+      }
+
+      checkFeeding(){
+        if(this.nutritivaCount===0) return;
+        let cosA = cos(this.angle), sinA = sin(this.angle);
+        for(let i = foodParticles.length-1; i>=0; i--){
+          let f = foodParticles[i]; let dx = f.pos.x - this.pos.x; let dy = f.pos.y - this.pos.y; if(dx*dx + dy*dy > 30000) continue;
+          for(let c of this.cells){ if(c.type !== 'NUTRITIVA') continue; let wx = this.pos.x + (c.dx * cosA - c.dy * sinA); let wy = this.pos.y + (c.dx * sinA + c.dy * cosA); let ddx = wx - f.pos.x, ddy = wy - f.pos.y; let d2 = ddx*ddx + ddy*ddy; let colR = CONFIG.cellRadius + 6; if(d2 < colR*colR){ this.energy += CONFIG.foodEnergy; this.energy = min(this.energy, CONFIG.reproduceEnergy * 3); foodParticles.splice(i,1); break; } }
+        }
+      }
+
+      checkReproduction(){ if(this.energy >= CONFIG.reproduceEnergy && this.cells.length <= CONFIG.maxCellsLimit){ return this.mitosis(); } return null; }
+
+      mitosis(){
+        this.energy /= 2.1;
+        let childDna = this.dna.map(g => ({dx:g.dx,dy:g.dy,type:g.type}));
+        if(random(1) < CONFIG.mutationRate){
+          if(random(1) < 0.55 && childDna.length>0){ let idx = floor(random(childDna.length)); childDna[idx].type = random(['NUTRITIVA','MOTORA','CORAZA']); }
+          else { let anchor = random(childDna); let dirs = [[1,0],[-1,0],[0,1],[0,-1]]; let d = random(dirs); let newDx = anchor.dx + d[0]*CONFIG.cellSpacing; let newDy = anchor.dy + d[1]*CONFIG.cellSpacing; let occupied = childDna.some(g => g.dx===newDx && g.dy===newDy); if(!occupied && childDna.length < CONFIG.maxCellsLimit){ childDna.push({dx:newDx,dy:newDy,type: random(['NUTRITIVA','MOTORA','CORAZA'])}); } }
+        }
+        let offset = p5.Vector.random2D().setMag(CONFIG.cellSpacing*2);
+        let child = new Organism(this.pos.x + offset.x, this.pos.y + offset.y, childDna, this.energy, this.generation + 1);
+        if(child.generation > globalMaxGeneration) globalMaxGeneration = child.generation;
+        return child;
+      }
+
+      display(){
+        push(); translate(this.pos.x, this.pos.y); rotate(this.angle);
+        stroke(255,255,255,28); strokeWeight(1.4);
+        for(let i=0;i<this.cells.length;i++){ for(let j=i+1;j<this.cells.length;j++){ let c1=this.cells[i], c2=this.cells[j]; let d = dist(c1.dx,c1.dy,c2.dx,c2.dy); if(d < CONFIG.cellSpacing * 1.6){ line(c1.dx, c1.dy, c2.dx, c2.dy); } } }
+        noStroke();
+        for(let c of this.cells){ let col = c.getColor(); fill(red(col), green(col), blue(col), 200); ellipse(c.dx, c.dy, CONFIG.cellRadius*2); fill(255,255,255,150); ellipse(c.dx - 2, c.dy - 2, CONFIG.cellRadius*0.7); }
+        fill(255,255,255,80); ellipse(0,0,4);
+        pop();
+      }
+    }
+
+    // --- Setup y loop principal ---
+    function setup(){
+      let canvas = createCanvas(windowWidth, windowHeight); canvas.parent('canvas-container'); frameRate(60);
+      for(let i=0;i<CONFIG.initialOrganisms;i++){ let starterDna = [ {dx:0,dy:0,type:'NUTRITIVA'}, {dx:-CONFIG.cellSpacing,dy:0,type:'MOTORA'}, {dx:0,dy:CONFIG.cellSpacing,type:'CORAZA'} ]; organisms.push(new Organism(random(100,width-100), random(100,height-100), starterDna, CONFIG.startEnergy, 1)); }
+      for(let i=0;i<CONFIG.maxFood;i++){ foodParticles.push(new Food(random(20,width-20), random(20,height-20))); }
+
+      const btn = document.getElementById('btn-play'); btn.addEventListener('click', () => { paused = !paused; btn.innerText = paused ? 'Reanudar' : 'Pausa'; });
+      document.getElementById('btn-randomize').addEventListener('click', () => location.reload());
+      const mut = document.getElementById('mutRate'); const mutVal = document.getElementById('mutVal'); mut.addEventListener('input', (e)=>{ CONFIG.mutationRate = parseFloat(e.target.value); mutVal.innerText = Math.round(CONFIG.mutationRate*100)+'%'; }); mutVal.innerText = Math.round(CONFIG.mutationRate*100)+'%';
+      const speed = document.getElementById('speedMul'); const speedVal = document.getElementById('speedVal'); speed.addEventListener('input', (e)=>{ speedMultiplier = parseFloat(e.target.value); speedVal.innerText = speedMultiplier.toFixed(2)+'x'; }); speedVal.innerText = speedMultiplier.toFixed(2)+'x';
+
+      canvas.mouseClicked(()=> { foodParticles.push(new Food(mouseX, mouseY)); if(foodParticles.length > CONFIG.maxFood*1.5) foodParticles.splice(0, foodParticles.length - CONFIG.maxFood*1.5); });
+      canvas.doubleClicked(()=>{ for(let o of organisms){ let push = p5.Vector.sub(createVector(mouseX,mouseY), o.pos).mult(-0.05); o.applyForce(push); } });
+    }
+
+    let last = performance.now();
+    function draw(){
+      let now = performance.now(); let dt = (now - last) / 1000; last = now;
+      background(11,15,25,255);
+      while(foodParticles.length < CONFIG.maxFood){ foodParticles.push(new Food(random(20,width-20), random(20,height-20))); }
+      for(let f of foodParticles) f.display();
+
+      if(!paused){
+        let currentMaxClusterSize = 0; let newOffspring = [];
+        for(let i = organisms.length-1; i>=0; i--){ let org = organisms[i]; org.update(dt); org.checkFeeding(); if(org.energy <= 0){ organisms.splice(i,1); continue; } let child = org.checkReproduction(); if(child) newOffspring.push(child); org.display(); if(org.cells.length > currentMaxClusterSize) currentMaxClusterSize = org.cells.length; if(org.generation > globalMaxGeneration) globalMaxGeneration = org.generation; }
+        if(newOffspring.length) organisms.push(...newOffspring);
+        if(organisms.length === 0){ for(let i=0;i<6;i++){ let dna = [ {dx:0,dy:0,type:'NUTRITIVA'}, {dx:-CONFIG.cellSpacing,dy:0,type:'MOTORA'} ]; organisms.push(new Organism(random(width), random(height), dna, CONFIG.startEnergy,1)); } }
+      } else { for(let org of organisms) org.display(); }
+
+      document.getElementById('val-generation').innerText = globalMaxGeneration;
+      document.getElementById('val-count').innerText = organisms.length;
+      document.getElementById('val-max-size').innerText = (organisms.length ? max(...organisms.map(o=>o.cells.length)) : 0) + ' cél.';
+      document.getElementById('val-food').innerText = foodParticles.length;
+
+      if(millis() - lastFPSUpdate > 250){ document.getElementById('fps').innerText = Math.round(frameRate()); lastFPSUpdate = millis(); }
+    }
+
+    function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
+    function max(...args){ return Math.max(...args); }
+  </script>
+</body>
+</html>
